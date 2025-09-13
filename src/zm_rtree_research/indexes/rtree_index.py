@@ -73,7 +73,8 @@ class RTreeIndex:
         self.index = index.Index(properties=properties)
         
         # Insert all points into the index
-        for i, (lat, lon) in enumerate(coordinates):
+        for i, coord in enumerate(coordinates):
+            lat, lon = coord[0], coord[1]  # Safely extract first two values
             # R-Tree expects (left, bottom, right, top) bounding box
             # For points, left=right and bottom=top
             bbox = (lon, lat, lon, lat)
@@ -114,7 +115,7 @@ class RTreeIndex:
         # Filter results by exact distance if needed
         results = []
         for idx in candidates:
-            point_lat, point_lon = self.coordinates[idx]
+            point_lat, point_lon = self.coordinates[idx][0], self.coordinates[idx][1]  # Safe extraction
             distance = np.sqrt((lat - point_lat)**2 + (lon - point_lon)**2)
             if distance <= tolerance:
                 results.append(idx)
@@ -175,7 +176,7 @@ class RTreeIndex:
         # Calculate distances and create result tuples
         results = []
         for idx in nearest_ids:
-            point_lat, point_lon = self.coordinates[idx]
+            point_lat, point_lon = self.coordinates[idx][0], self.coordinates[idx][1]  # Safe extraction
             distance = np.sqrt((lat - point_lat)**2 + (lon - point_lon)**2)
             results.append((idx, distance))
         
@@ -200,7 +201,8 @@ class RTreeIndex:
             List of result lists, one for each query point
         """
         results = []
-        for lat, lon in query_points:
+        for coord in query_points:
+            lat, lon = coord[0], coord[1]  # Safely extract first two values
             result = self.point_query(lat, lon, tolerance)
             results.append(result)
         return results
@@ -217,7 +219,8 @@ class RTreeIndex:
             List of result lists, one for each query box
         """
         results = []
-        for min_lat, max_lat, min_lon, max_lon in query_boxes:
+        for box in query_boxes:
+            min_lat, max_lat, min_lon, max_lon = box[0], box[1], box[2], box[3]  # Safely extract first four values
             result = self.range_query(min_lat, max_lat, min_lon, max_lon)
             results.append(result)
         return results

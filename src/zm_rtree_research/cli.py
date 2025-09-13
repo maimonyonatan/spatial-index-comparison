@@ -165,7 +165,7 @@ def knn_query(
         click.echo("\nNearest neighbors:")
         
         for i, (idx, distance) in enumerate(result['results'][:10], 1):
-            point_lat, point_lon = coordinates[idx]
+            point_lat, point_lon = coordinates[idx][0], coordinates[idx][1]  # Safe extraction
             click.echo(f"  {i}. Point {idx}: ({point_lat:.6f}, {point_lon:.6f}) - Distance: {distance:.6f}")
         
         if len(result['results']) > 10:

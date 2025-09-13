@@ -108,7 +108,7 @@ def basic_example():
     print("\n🔍 Executing sample queries...")
     
     # Point query
-    query_lat, query_lon = coordinates[100]  # Use a point from the dataset
+    query_lat, query_lon = coordinates[100][0], coordinates[100][1]  # Safe extraction
     print(f"\n  Point Query at ({query_lat:.4f}, {query_lon:.4f}):")
     point_results = query_engine.point_query(query_lat, query_lon, tolerance=0.001)
     

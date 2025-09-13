@@ -1,5 +1,6 @@
 """
 Learned ZM Index using Linear Regression.
+Implements the learned Z-order Model (ZM) index from Wang et al. 2019 paper.
 """
 
 import logging
@@ -18,8 +19,11 @@ class ZMLinearIndex:
     """
     Learned ZM (Z-order/Morton) Index using Linear Regression.
     
-    Uses machine learning to predict Z-order positions for spatial queries,
-    enabling efficient spatial operations through learned mappings.
+    Implements the learned index approach from Wang et al. 2019 paper:
+    "Learned Index for Spatial Queries"
+    
+    Uses Z-order curve mapping and machine learning to predict positions 
+    for efficient spatial query processing.
     """
     
     def __init__(
@@ -29,6 +33,7 @@ class ZMLinearIndex:
         regularization: str = "l2",
         alpha: float = 1.0,
         normalize_features: bool = True,
+        precision_bits: int = 16,
         **kwargs
     ):
         """
@@ -40,6 +45,7 @@ class ZMLinearIndex:
             regularization: Regularization type ("none", "l1", "l2", "elastic")
             alpha: Regularization strength (higher = more regularization)
             normalize_features: Whether to normalize input features
+            precision_bits: Number of bits for Z-address computation
             **kwargs: Additional parameters (for compatibility)
         """
         self.degree = degree
@@ -47,14 +53,52 @@ class ZMLinearIndex:
         self.regularization = regularization
         self.alpha = alpha
         self.normalize_features = normalize_features
+        self.precision_bits = precision_bits
         self.model: Optional[LinearRegression] = None
         self.poly_features: Optional[PolynomialFeatures] = None
         self.scaler = None
         self.coordinates: Optional[np.ndarray] = None
         self.morton_codes: Optional[np.ndarray] = None
         self.sorted_indices: Optional[np.ndarray] = None
+        self.sorted_z_addresses: Optional[np.ndarray] = None
         self.build_time: Optional[float] = None
         self.memory_usage: Optional[float] = None
+        self.min_error: float = 0.0  # worst over-prediction
+        self.max_error: float = 0.0  # worst under-prediction
+        
+        # Coordinate bounds for Z-address computation
+        self.min_coords: Optional[np.ndarray] = None
+        self.max_coords: Optional[np.ndarray] = None
+        self.coord_scale: Optional[np.ndarray] = None
+        
+    def _compute_z_address(self, coordinates: np.ndarray) -> np.ndarray:
+        """
+        Compute Z-addresses (Morton codes) using bit interleaving.
+        
+        Args:
+            coordinates: Array of (lat, lon) coordinates, shape (N, 2)
+            
+        Returns:
+            Array of Z-addresses
+        """
+        if self.min_coords is None or self.max_coords is None:
+            raise ValueError("Coordinate bounds not set. Call build() first.")
+        
+        # Normalize coordinates to [0, 2^precision_bits - 1]
+        normalized = (coordinates - self.min_coords) / self.coord_scale
+        quantized = np.clip(normalized * (2**self.precision_bits - 1), 0, 2**self.precision_bits - 1).astype(np.uint32)
+        
+        # Compute Z-addresses using bit interleaving
+        z_addresses = np.zeros(len(coordinates), dtype=np.uint64)
+        
+        for i in range(len(coordinates)):
+            x, y = quantized[i, 0], quantized[i, 1]
+            z = 0
+            for bit in range(self.precision_bits):
+                z |= (x & (1 << bit)) << bit | (y & (1 << bit)) << (bit + 1)
+            z_addresses[i] = z
+            
+        return z_addresses
         
     def build(self, coordinates: np.ndarray, morton_codes: np.ndarray) -> None:
         """
@@ -62,35 +106,50 @@ class ZMLinearIndex:
         
         Args:
             coordinates: Array of (lat, lon) coordinates, shape (N, 2)
-            morton_codes: Array of Morton/Z-order codes, shape (N,)
+            morton_codes: Array of Morton/Z-order codes, shape (N,) (for compatibility, will be recomputed)
         """
         logger.info(f"Building ZM Linear Index for {len(coordinates)} points")
         start_time = time.perf_counter()
         
         self.coordinates = coordinates.copy()
-        self.morton_codes = morton_codes.copy()
         
-        # Sort data by Morton codes for efficient range queries
-        self.sorted_indices = np.argsort(morton_codes)
-        sorted_morton = morton_codes[self.sorted_indices]
-        sorted_coords = coordinates[self.sorted_indices]
+        # Compute coordinate bounds for Z-address computation
+        self.min_coords = np.min(coordinates, axis=0)
+        self.max_coords = np.max(coordinates, axis=0)
+        self.coord_scale = self.max_coords - self.min_coords
+        # Avoid division by zero
+        self.coord_scale = np.where(self.coord_scale == 0, 1.0, self.coord_scale)
         
-        # Prepare features (possibly with polynomial terms)
+        # Compute Z-addresses using proper bit interleaving
+        z_addresses = self._compute_z_address(coordinates)
+        
+        # Sort data by Z-addresses for efficient range queries
+        self.sorted_indices = np.argsort(z_addresses)
+        self.sorted_z_addresses = z_addresses[self.sorted_indices]
+        
+        # Prepare features for learning
+        # Input: Z-addresses, Output: positions in sorted order
+        X = self.sorted_z_addresses.reshape(-1, 1).astype(np.float64)
+        
         if self.degree > 1:
             self.poly_features = PolynomialFeatures(
                 degree=self.degree, 
                 include_bias=self.include_bias
             )
-            X = self.poly_features.fit_transform(sorted_coords)
-        else:
-            X = sorted_coords
+            X = self.poly_features.fit_transform(X)
         
-        # Train linear regression model to predict Morton code position
+        # Target is the position in sorted Z-address order
+        y = np.arange(len(self.sorted_z_addresses)).astype(np.float64)
+        
+        # Train linear regression model: Z-address -> position
         self.model = LinearRegression(fit_intercept=self.include_bias and self.degree == 1)
-        
-        # Target is the position in sorted Morton order
-        y = np.arange(len(sorted_morton))
         self.model.fit(X, y)
+        
+        # Calculate prediction errors for query bounds
+        predictions = self.model.predict(X)
+        errors = predictions - y
+        self.min_error = np.min(errors)  # worst over-prediction (negative)
+        self.max_error = np.max(errors)  # worst under-prediction (positive)
         
         self.build_time = time.perf_counter() - start_time
         self._calculate_memory_usage()
@@ -98,13 +157,14 @@ class ZMLinearIndex:
         logger.info(f"ZM Linear Index built in {self.build_time:.4f} seconds")
         logger.info(f"Memory usage: {self.memory_usage:.2f} MB")
         logger.info(f"Model R² score: {self.model.score(X, y):.4f}")
+        logger.info(f"Prediction error range: [{self.min_error:.2f}, {self.max_error:.2f}]")
     
-    def _predict_position(self, coordinates: np.ndarray) -> np.ndarray:
+    def _predict_position(self, z_addresses: np.ndarray) -> np.ndarray:
         """
-        Predict position in sorted Morton order for given coordinates.
+        Predict position in sorted Z-address order for given Z-addresses.
         
         Args:
-            coordinates: Array of coordinates, shape (N, 2)
+            z_addresses: Array of Z-addresses
             
         Returns:
             Predicted positions as array
@@ -112,18 +172,55 @@ class ZMLinearIndex:
         if self.model is None:
             raise ValueError("Index not built. Call build() first.")
         
+        X = z_addresses.reshape(-1, 1).astype(np.float64)
+        
         if self.poly_features is not None:
-            X = self.poly_features.transform(coordinates)
-        else:
-            X = coordinates
+            X = self.poly_features.transform(X)
         
         positions = self.model.predict(X)
         # Clip to valid range
         return np.clip(positions, 0, len(self.sorted_indices) - 1)
     
+    def _model_biased_search(self, predicted_pos: float, target_z_address: int) -> int:
+        """
+        Perform Model Biased Search (MBS) as described in the paper.
+        
+        Args:
+            predicted_pos: Predicted position from the model
+            target_z_address: Target Z-address to find
+            
+        Returns:
+            Actual position of the target Z-address, or -1 if not found
+        """
+        # Calculate search bounds using min/max error
+        min_pos = max(0, int(predicted_pos + self.min_error))
+        max_pos = min(len(self.sorted_z_addresses) - 1, int(predicted_pos + self.max_error))
+        
+        # Binary search with model bias (start from predicted position)
+        left, right = min_pos, max_pos
+        start_pos = max(min_pos, min(max_pos, int(predicted_pos)))
+        
+        # Check predicted position first
+        if self.sorted_z_addresses[start_pos] == target_z_address:
+            return start_pos
+            
+        # Search left and right alternately
+        for radius in range(1, max_pos - min_pos + 1):
+            # Check right
+            pos = start_pos + radius
+            if pos <= max_pos and self.sorted_z_addresses[pos] == target_z_address:
+                return pos
+                
+            # Check left  
+            pos = start_pos - radius
+            if pos >= min_pos and self.sorted_z_addresses[pos] == target_z_address:
+                return pos
+                
+        return -1  # Not found
+    
     def point_query(self, lat: float, lon: float, tolerance: float = 1e-6) -> List[int]:
         """
-        Perform point query using learned index.
+        Perform point query using learned ZM index.
         
         Args:
             lat: Query latitude
@@ -136,56 +233,55 @@ class ZMLinearIndex:
         if self.model is None:
             raise ValueError("Index not built. Call build() first.")
         
+        # Compute Z-address for query point
         query_coords = np.array([[lat, lon]])
-        predicted_pos = self._predict_position(query_coords)[0]
+        query_z_address = self._compute_z_address(query_coords)[0]
+        
+        # Predict position using learned model
+        predicted_pos = self._predict_position(np.array([query_z_address]))[0]
         
         logger.info(f"ZM Linear point query: lat={lat:.6f}, lon={lon:.6f}, tolerance={tolerance:.6f}")
-        logger.info(f"Predicted position: {predicted_pos:.2f} (out of {len(self.sorted_indices)-1})")
-        
-        # Much more aggressive search for point queries - tolerance might be large
-        # Start with a reasonable window, then expand if needed
-        initial_search_radius = max(100, int(len(self.coordinates) * 0.05))  # Start with 5% of data
+        logger.info(f"Query Z-address: {query_z_address}, Predicted position: {predicted_pos:.2f}")
         
         results = []
-        search_radius = initial_search_radius
         
-        # Iterative search with expanding window if no results found
-        while len(results) == 0 and search_radius <= len(self.coordinates) // 2:
-            start_pos = max(0, int(predicted_pos) - search_radius)
-            end_pos = min(len(self.sorted_indices), int(predicted_pos) + search_radius + 1)
-            
-            logger.info(f"Searching range [{start_pos}:{end_pos}] (radius={search_radius})")
-            
-            # Search for points within tolerance
-            candidates_checked = 0
-            for i in range(start_pos, end_pos):
-                actual_idx = self.sorted_indices[i]
-                point_lat, point_lon = self.coordinates[actual_idx]
-                distance = np.sqrt((lat - point_lat)**2 + (lon - point_lon)**2)
-                candidates_checked += 1
-                
-                # Debug: Log first few candidates for detailed analysis
-                if candidates_checked <= 5:
-                    logger.info(f"Candidate {candidates_checked}: idx={actual_idx}, coords=({point_lat:.6f}, {point_lon:.6f}), distance={distance:.6f}, tolerance={tolerance:.6f}")
-                
-                if distance <= tolerance:
-                    results.append(actual_idx)
-                    logger.debug(f"Found match: idx={actual_idx}, coords=({point_lat:.6f}, {point_lon:.6f}), dist={distance:.6f}")
-                    
-                # Debug: Check for very close matches that might be just outside tolerance
-                elif distance <= tolerance * 10:  # Within 10x tolerance
-                    logger.info(f"Near miss: idx={actual_idx}, coords=({point_lat:.6f}, {point_lon:.6f}), distance={distance:.6f} (tolerance={tolerance:.6f})")
-            
-            logger.info(f"Checked {candidates_checked} candidates, found {len(results)} matches")
-            
-            # If no results found and tolerance is small, try expanding search
-            if len(results) == 0 and search_radius < len(self.coordinates) // 4:
-                search_radius *= 2
-                logger.info(f"No matches found, expanding search radius to {search_radius}")
-            else:
-                break
+        # For point queries with tolerance, we need to search spatially, not just for exact Z-address matches
+        # Calculate search radius based on tolerance and error bounds
         
-        logger.info(f"ZM Linear point query final: predicted_pos={predicted_pos:.1f}, search_radius={search_radius}, results={len(results)}")
+        # Base search radius: account for model prediction errors and spatial tolerance
+        # Convert spatial tolerance to position search radius (rough estimate)
+        coordinate_range = np.max(self.coord_scale)  # max coordinate range
+        spatial_to_position_factor = len(self.coordinates) / (coordinate_range ** 2)  # rough conversion
+        tolerance_radius = int(tolerance * np.sqrt(spatial_to_position_factor)) + 1
+        
+        # Account for model prediction errors
+        error_margin = int(self.max_error - self.min_error) + 1
+        search_radius = max(tolerance_radius, error_margin, 100)
+        
+        # Also expand search for larger tolerances
+        if tolerance > 1e-4:  # For large tolerances, search more aggressively
+            search_radius = max(search_radius, int(len(self.coordinates) * 0.05))
+        
+        logger.info(f"Using search radius: {search_radius} (tolerance_radius={tolerance_radius}, error_margin={error_margin})")
+        
+        # Search around predicted position
+        min_pos = max(0, int(predicted_pos) - search_radius)
+        max_pos = min(len(self.sorted_indices), int(predicted_pos) + search_radius + 1)
+        
+        logger.info(f"Searching range [{min_pos}:{max_pos}]")
+        
+        candidates_checked = 0
+        for i in range(min_pos, max_pos):
+            actual_idx = self.sorted_indices[i]
+            point_lat, point_lon = self.coordinates[actual_idx][0], self.coordinates[actual_idx][1]  # Safe extraction
+            distance = np.sqrt((lat - point_lat)**2 + (lon - point_lon)**2)
+            candidates_checked += 1
+            
+            if distance <= tolerance:
+                results.append(actual_idx)
+                logger.debug(f"Found match: idx={actual_idx}, coords=({point_lat:.6f}, {point_lon:.6f}), distance={distance:.6f}")
+        
+        logger.info(f"ZM Linear point query: checked {candidates_checked} candidates, found {len(results)} matches")
         return results
     
     def range_query(
@@ -196,7 +292,7 @@ class ZMLinearIndex:
         max_lon: float
     ) -> List[int]:
         """
-        Perform range query using learned index.
+        Perform range query using learned ZM index following the paper's approach.
         
         Args:
             min_lat: Minimum latitude
@@ -212,102 +308,87 @@ class ZMLinearIndex:
         
         logger.info(f"ZM Linear range query: [{min_lat:.6f}, {max_lat:.6f}] × [{min_lon:.6f}, {max_lon:.6f}]")
         
-        # Predict positions for multiple points across the query region
-        # Use a grid of points to better estimate the range of Morton positions
-        grid_points = []
-        for lat_factor in [0.0, 0.25, 0.5, 0.75, 1.0]:
-            for lon_factor in [0.0, 0.25, 0.5, 0.75, 1.0]:
-                lat = min_lat + lat_factor * (max_lat - min_lat)
-                lon = min_lon + lon_factor * (max_lon - min_lon)
-                grid_points.append([lat, lon])
+        # Compute Z-addresses for query region corners (following paper's approach)
+        p_start = np.array([[min_lat, min_lon]])  # bottom-left
+        p_end = np.array([[max_lat, max_lon]])    # top-right
         
-        grid_coords = np.array(grid_points)
-        predicted_positions = self._predict_position(grid_coords)
+        z_start = self._compute_z_address(p_start)[0]
+        z_end = self._compute_z_address(p_end)[0]
         
-        # Use wider margins for range queries since spatial ranges can be scattered in Morton order
-        min_predicted = np.min(predicted_positions)
-        max_predicted = np.max(predicted_positions)
-        range_span = max_predicted - min_predicted
+        # Predict positions for start and end Z-addresses
+        pos_start = self._predict_position(np.array([z_start]))[0]
+        pos_end = self._predict_position(np.array([z_end]))[0]
         
-        # Expand search window significantly for range queries
-        margin = max(500, int(len(self.coordinates) * 0.1), int(range_span * 0.5))
-        min_pos = max(0, int(min_predicted - margin))
-        max_pos = min(len(self.sorted_indices), int(max_predicted + margin + 1))
+        # Calculate search bounds with error margins
+        min_pos = max(0, int(min(pos_start, pos_end) + self.min_error))
+        max_pos = min(len(self.sorted_indices), int(max(pos_start, pos_end) + self.max_error + 1))
         
-        logger.info(f"ZM Linear range: predicted [{min_predicted:.1f}, {max_predicted:.1f}], searching [{min_pos}:{max_pos}] (margin={margin})")
+        logger.info(f"Z-addresses: start={z_start}, end={z_end}")
+        logger.info(f"Predicted positions: start={pos_start:.1f}, end={pos_end:.1f}")
+        logger.info(f"Search range: [{min_pos}:{max_pos}]")
         
         # Scan predicted range and filter by actual coordinates
         results = []
         candidates_checked = 0
+        
         for i in range(min_pos, max_pos):
             actual_idx = self.sorted_indices[i]
-            point_lat, point_lon = self.coordinates[actual_idx]
+            point_lat, point_lon = self.coordinates[actual_idx][0], self.coordinates[actual_idx][1]  # Safe extraction
             candidates_checked += 1
             
+            # Check if point is within query rectangle
             if (min_lat <= point_lat <= max_lat and 
                 min_lon <= point_lon <= max_lon):
                 results.append(actual_idx)
         
         logger.info(f"ZM Linear range query: checked {candidates_checked} candidates, found {len(results)} matches")
         return results
-    
+
     def knn_query(self, lat: float, lon: float, k: int = 1) -> List[Tuple[int, float]]:
         """
-        Perform k-nearest neighbor query using learned index.
+        Find k nearest neighbors using learned ZM index.
         
         Args:
             lat: Query latitude
-            lon: Query longitude
-            k: Number of nearest neighbors to find
+            lon: Query longitude  
+            k: Number of nearest neighbors
             
         Returns:
-            List of (point_index, distance) tuples for k nearest neighbors
+            List of (index, distance) tuples for k nearest neighbors
         """
         if self.model is None:
             raise ValueError("Index not built. Call build() first.")
         
+        # Compute Z-address for query point
         query_coords = np.array([[lat, lon]])
-        predicted_pos = self._predict_position(query_coords)[0]
+        query_z_address = self._compute_z_address(query_coords)[0]
         
-        # More aggressive search for k-NN to ensure accuracy
-        # Start with a reasonable window, then expand if needed
-        initial_search_radius = max(k * 10, int(len(self.coordinates) * 0.05))  # Increased from 0.01
+        # Predict position
+        predicted_pos = self._predict_position(np.array([query_z_address]))[0]
         
+        # Search around predicted position for k nearest neighbors
+        search_radius = max(k * 2, 100)
         candidates = []
-        search_radius = initial_search_radius
         
-        # Iterative search with expanding window if not enough candidates found
-        while len(candidates) < k * 3 and search_radius <= len(self.coordinates) // 2:
-            candidates = []
-            start_pos = max(0, int(predicted_pos) - search_radius)
-            end_pos = min(len(self.sorted_indices), int(predicted_pos) + search_radius + 1)
+        while len(candidates) < k * 5 and search_radius < len(self.coordinates) // 2:
+            min_pos = max(0, int(predicted_pos) - search_radius)
+            max_pos = min(len(self.sorted_indices), int(predicted_pos) + search_radius + 1)
             
-            # Calculate distances for candidates
-            for i in range(start_pos, end_pos):
+            for i in range(min_pos, max_pos):
                 actual_idx = self.sorted_indices[i]
-                point_lat, point_lon = self.coordinates[actual_idx]
+                point_lat, point_lon = self.coordinates[actual_idx][0], self.coordinates[actual_idx][1]  # Safe extraction
                 distance = np.sqrt((lat - point_lat)**2 + (lon - point_lon)**2)
                 candidates.append((actual_idx, distance))
             
-            # If we don't have enough candidates, expand search
-            if len(candidates) < k * 2:
+            if len(candidates) < k * 5:
                 search_radius *= 2
-                logger.debug(f"Expanding k-NN search radius to {search_radius}")
             else:
                 break
-        
-        # If we still don't have enough candidates, fall back to brute force
-        if len(candidates) < k:
-            logger.warning(f"ZM Linear k-NN: prediction failed, falling back to brute force search")
-            candidates = []
-            for i, (point_lat, point_lon) in enumerate(self.coordinates):
-                distance = np.sqrt((lat - point_lat)**2 + (lon - point_lon)**2)
-                candidates.append((i, distance))
         
         # Sort by distance and return top k
         candidates.sort(key=lambda x: x[1])
         return candidates[:k]
-    
+
     def batch_point_queries(
         self, 
         query_points: np.ndarray, 
@@ -324,7 +405,8 @@ class ZMLinearIndex:
             List of result lists, one for each query point
         """
         results = []
-        for lat, lon in query_points:
+        for coord in query_points:
+            lat, lon = coord[0], coord[1]  # Safely extract first two values
             result = self.point_query(lat, lon, tolerance)
             results.append(result)
         return results
@@ -344,7 +426,8 @@ class ZMLinearIndex:
             List of result lists, one for each query box
         """
         results = []
-        for min_lat, max_lat, min_lon, max_lon in query_boxes:
+        for box in query_boxes:
+            min_lat, max_lat, min_lon, max_lon = box[0], box[1], box[2], box[3]  # Safely extract first four values
             result = self.range_query(min_lat, max_lat, min_lon, max_lon)
             results.append(result)
         return results
@@ -360,12 +443,11 @@ class ZMLinearIndex:
             return {"status": "not_built"}
         
         # Calculate model accuracy metrics
+        X = self.sorted_z_addresses.reshape(-1, 1).astype(np.float64)
         if self.poly_features is not None:
-            X = self.poly_features.transform(self.coordinates[self.sorted_indices])
-        else:
-            X = self.coordinates[self.sorted_indices]
+            X = self.poly_features.transform(X)
         
-        y = np.arange(len(self.sorted_indices))
+        y = np.arange(len(self.sorted_z_addresses))
         r2_score = self.model.score(X, y)
         
         stats = {
@@ -375,7 +457,11 @@ class ZMLinearIndex:
             "memory_usage_mb": self.memory_usage,
             "degree": self.degree,
             "include_bias": self.include_bias,
+            "precision_bits": self.precision_bits,
             "r2_score": r2_score,
+            "min_error": self.min_error,
+            "max_error": self.max_error,
+            "error_range": self.max_error - self.min_error,
             "model_coefficients": self.model.coef_.tolist() if self.model.coef_ is not None else None,
             "model_intercept": float(self.model.intercept_) if hasattr(self.model, 'intercept_') else None,
         }
@@ -390,10 +476,10 @@ class ZMLinearIndex:
             # Memory for data storage
             if self.coordinates is not None:
                 memory_usage += self.coordinates.nbytes / (1024 * 1024)
-            if self.morton_codes is not None:
-                memory_usage += self.morton_codes.nbytes / (1024 * 1024)
             if self.sorted_indices is not None:
                 memory_usage += self.sorted_indices.nbytes / (1024 * 1024)
+            if self.sorted_z_addresses is not None:
+                memory_usage += self.sorted_z_addresses.nbytes / (1024 * 1024)
             
             # Memory for model (rough estimate)
             if self.model is not None and hasattr(self.model, 'coef_'):
@@ -412,6 +498,10 @@ class ZMLinearIndex:
         self.coordinates = None
         self.morton_codes = None
         self.sorted_indices = None
+        self.sorted_z_addresses = None
+        self.min_coords = None
+        self.max_coords = None
+        self.coord_scale = None
         self.build_time = None
         self.memory_usage = None
         logger.info("ZM Linear Index cleared")

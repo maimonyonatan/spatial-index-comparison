@@ -216,7 +216,7 @@ class PerformanceEvaluator:
             if not query_times:
                 query_times = [result.get('avg_time_per_query', 0.0)]
             
-            # Calculate accuracy metrics (placeholder - would need ground truth)
+            # Calculate accuracy metrics
             accuracy_metrics = self._calculate_accuracy_metrics(result, benchmark)
             
             metrics[index_name] = PerformanceMetrics(
@@ -241,7 +241,7 @@ class PerformanceEvaluator:
         benchmark: QueryBenchmark
     ) -> Dict[str, float]:
         """
-        Calculate accuracy metrics for learned indexes.
+        Calculate accuracy metrics for learned indexes by comparing with R-Tree baseline.
         
         Args:
             result: Query execution result
@@ -250,29 +250,368 @@ class PerformanceEvaluator:
         Returns:
             Dictionary with accuracy metrics
         """
-        # Placeholder implementation - in practice, would compare with ground truth
-        # from R-Tree or exact computation
-        
+        # Initialize default metrics
         accuracy_metrics = {
-            'precision': 1.0,  # Would calculate true precision
-            'recall': 1.0,     # Would calculate true recall
-            'f1_score': 1.0,   # Would calculate F1 score
+            'precision': 1.0,
+            'recall': 1.0,
+            'f1_score': 1.0,
         }
         
-        if benchmark.query_type == QueryType.RANGE:
-            # For range queries, could calculate error bounds
-            accuracy_metrics.update({
-                'avg_error_bound': 0.0,
-                'max_error_bound': 0.0
-            })
-        elif benchmark.query_type == QueryType.KNN:
-            # For kNN queries, could calculate distance accuracy
-            accuracy_metrics.update({
-                'distance_accuracy': 1.0,
-                'ranking_accuracy': 1.0
-            })
+        # If this is the R-Tree result, it's our ground truth
+        if result.get('index_type') == 'RTREE':
+            return accuracy_metrics
+        
+        # For learned indexes, compare against R-Tree if available
+        try:
+            # Get R-Tree baseline results for the same queries
+            rtree_results = self._get_rtree_baseline(benchmark)
+            if not rtree_results:
+                logger.warning("No R-Tree baseline available for accuracy comparison")
+                return accuracy_metrics
+            
+            # Compare results based on query type
+            if benchmark.query_type == QueryType.RANGE:
+                accuracy_metrics = self._calculate_range_accuracy(result, rtree_results)
+            elif benchmark.query_type == QueryType.KNN:
+                accuracy_metrics = self._calculate_knn_accuracy(result, rtree_results)
+            elif benchmark.query_type == QueryType.POINT:
+                accuracy_metrics = self._calculate_point_accuracy(result, rtree_results)
+            
+        except Exception as e:
+            logger.error(f"Error calculating accuracy metrics: {e}")
         
         return accuracy_metrics
+    
+    def _get_rtree_baseline(self, benchmark: QueryBenchmark) -> Optional[Dict[str, Any]]:
+        """Get R-Tree baseline results for accuracy comparison."""
+        try:
+            # Check if R-Tree index is available
+            available_indexes = self.query_engine.list_indexes()
+            if 'rtree' not in available_indexes:
+                return None
+            
+            # Generate the same queries used in the benchmark
+            query_params = {}
+            if benchmark.query_type == QueryType.RANGE and benchmark.selectivity:
+                query_params['selectivity'] = benchmark.selectivity
+            if benchmark.query_type == QueryType.KNN and benchmark.k:
+                query_params['k'] = benchmark.k
+            if benchmark.query_type == QueryType.POINT and benchmark.tolerance:
+                query_params['tolerance'] = benchmark.tolerance
+            
+            queries = self.generate_random_queries(
+                benchmark.query_type,
+                benchmark.num_queries,
+                **query_params
+            )
+            
+            # Execute queries on R-Tree only
+            rtree_results = self.query_engine.batch_queries(
+                benchmark.query_type,
+                queries,
+                index_name='rtree'
+            )
+            
+            return rtree_results.get('rtree')
+            
+        except Exception as e:
+            logger.error(f"Error getting R-Tree baseline: {e}")
+            return None
+    
+    def _calculate_range_accuracy(
+        self,
+        learned_result: Dict[str, Any],
+        rtree_result: Dict[str, Any]
+    ) -> Dict[str, float]:
+        """Calculate accuracy metrics for range queries."""
+        accuracy_metrics = {
+            'precision': 1.0,
+            'recall': 1.0,
+            'f1_score': 1.0,
+            'avg_error_bound': 0.0,
+            'max_error_bound': 0.0
+        }
+        
+        try:
+            learned_results = learned_result.get('results', [])
+            rtree_results = rtree_result.get('results', [])
+            
+            if len(learned_results) != len(rtree_results):
+                logger.warning("Mismatch in result count for accuracy calculation")
+                return accuracy_metrics
+            
+            precisions = []
+            recalls = []
+            error_bounds = []
+            
+            for learned_res, rtree_res in zip(learned_results, rtree_results):
+                # Convert results to sets of IDs for comparison
+                learned_ids = set(learned_res.get('point_ids', []))
+                rtree_ids = set(rtree_res.get('point_ids', []))
+                
+                if len(rtree_ids) == 0:
+                    # Empty ground truth - perfect precision if learned result is also empty
+                    precision = 1.0 if len(learned_ids) == 0 else 0.0
+                    recall = 1.0
+                else:
+                    # Calculate precision and recall
+                    intersection = learned_ids.intersection(rtree_ids)
+                    precision = len(intersection) / len(learned_ids) if len(learned_ids) > 0 else 1.0
+                    recall = len(intersection) / len(rtree_ids)
+                
+                precisions.append(precision)
+                recalls.append(recall)
+                
+                # Calculate error bound (relative difference in result count)
+                if len(rtree_ids) > 0:
+                    error_bound = abs(len(learned_ids) - len(rtree_ids)) / len(rtree_ids)
+                    error_bounds.append(error_bound)
+                else:
+                    error_bounds.append(0.0 if len(learned_ids) == 0 else 1.0)
+            
+            # Aggregate metrics
+            avg_precision = np.mean(precisions)
+            avg_recall = np.mean(recalls)
+            f1_score = 2 * (avg_precision * avg_recall) / (avg_precision + avg_recall) \
+                      if (avg_precision + avg_recall) > 0 else 0.0
+            
+            accuracy_metrics.update({
+                'precision': avg_precision,
+                'recall': avg_recall,
+                'f1_score': f1_score,
+                'avg_error_bound': np.mean(error_bounds),
+                'max_error_bound': np.max(error_bounds)
+            })
+            
+        except Exception as e:
+            logger.error(f"Error calculating range query accuracy: {e}")
+        
+        return accuracy_metrics
+    
+    def _calculate_knn_accuracy(
+        self,
+        learned_result: Dict[str, Any],
+        rtree_result: Dict[str, Any]
+    ) -> Dict[str, float]:
+        """Calculate accuracy metrics for k-NN queries."""
+        accuracy_metrics = {
+            'precision': 1.0,
+            'recall': 1.0,
+            'f1_score': 1.0,
+            'distance_accuracy': 1.0,
+            'ranking_accuracy': 1.0
+        }
+        
+        try:
+            learned_results = learned_result.get('results', [])
+            rtree_results = rtree_result.get('results', [])
+            
+            if len(learned_results) != len(rtree_results):
+                logger.warning("Mismatch in result count for k-NN accuracy calculation")
+                return accuracy_metrics
+            
+            precisions = []
+            recalls = []
+            distance_accuracies = []
+            ranking_accuracies = []
+            
+            for learned_res, rtree_res in zip(learned_results, rtree_results):
+                # Get nearest neighbors and distances
+                learned_ids = learned_res.get('nearest_neighbors', [])
+                learned_distances = learned_res.get('distances', [])
+                rtree_ids = rtree_res.get('nearest_neighbors', [])
+                rtree_distances = rtree_res.get('distances', [])
+                
+                if len(rtree_ids) == 0:
+                    precisions.append(1.0)
+                    recalls.append(1.0)
+                    distance_accuracies.append(1.0)
+                    ranking_accuracies.append(1.0)
+                    continue
+                
+                # Calculate precision and recall for k-NN results
+                learned_set = set(learned_ids)
+                rtree_set = set(rtree_ids)
+                intersection = learned_set.intersection(rtree_set)
+                
+                precision = len(intersection) / len(learned_set) if len(learned_set) > 0 else 1.0
+                recall = len(intersection) / len(rtree_set)
+                
+                precisions.append(precision)
+                recalls.append(recall)
+                
+                # Calculate distance accuracy (average relative error)
+                if len(learned_distances) > 0 and len(rtree_distances) > 0:
+                    min_len = min(len(learned_distances), len(rtree_distances))
+                    distance_errors = []
+                    
+                    for i in range(min_len):
+                        if rtree_distances[i] > 0:
+                            rel_error = abs(learned_distances[i] - rtree_distances[i]) / rtree_distances[i]
+                            distance_errors.append(rel_error)
+                    
+                    distance_accuracy = 1.0 - np.mean(distance_errors) if distance_errors else 1.0
+                    distance_accuracies.append(max(0.0, distance_accuracy))
+                else:
+                    distance_accuracies.append(1.0)
+                
+                # Calculate ranking accuracy (Kendall's tau or simpler overlap measure)
+                if len(learned_ids) > 0 and len(rtree_ids) > 0:
+                    # Simple ranking accuracy: how many of the top-k are correct
+                    k = min(len(learned_ids), len(rtree_ids))
+                    top_k_learned = set(learned_ids[:k])
+                    top_k_rtree = set(rtree_ids[:k])
+                    ranking_acc = len(top_k_learned.intersection(top_k_rtree)) / k
+                    ranking_accuracies.append(ranking_acc)
+                else:
+                    ranking_accuracies.append(1.0)
+            
+            # Aggregate metrics
+            avg_precision = np.mean(precisions)
+            avg_recall = np.mean(recalls)
+            f1_score = 2 * (avg_precision * avg_recall) / (avg_precision + avg_recall) \
+                      if (avg_precision + avg_recall) > 0 else 0.0
+            
+            accuracy_metrics.update({
+                'precision': avg_precision,
+                'recall': avg_recall,
+                'f1_score': f1_score,
+                'distance_accuracy': np.mean(distance_accuracies),
+                'ranking_accuracy': np.mean(ranking_accuracies)
+            })
+            
+        except Exception as e:
+            logger.error(f"Error calculating k-NN accuracy: {e}")
+        
+        return accuracy_metrics
+    
+    def _calculate_point_accuracy(
+        self,
+        learned_result: Dict[str, Any],
+        rtree_result: Dict[str, Any]
+    ) -> Dict[str, float]:
+        """Calculate accuracy metrics for point queries."""
+        accuracy_metrics = {
+            'precision': 1.0,
+            'recall': 1.0,
+            'f1_score': 1.0,
+            'exact_match_rate': 1.0
+        }
+        
+        try:
+            learned_results = learned_result.get('results', [])
+            rtree_results = rtree_result.get('results', [])
+            
+            if len(learned_results) != len(rtree_results):
+                logger.warning("Mismatch in result count for point query accuracy calculation")
+                return accuracy_metrics
+            
+            exact_matches = 0
+            precisions = []
+            recalls = []
+            
+            for learned_res, rtree_res in zip(learned_results, rtree_results):
+                learned_found = learned_res.get('found', False)
+                rtree_found = rtree_res.get('found', False)
+                
+                # Exact match check
+                if learned_found == rtree_found:
+                    exact_matches += 1
+                
+                # Precision and recall for point queries
+                if rtree_found:
+                    # Ground truth says point exists
+                    precision = 1.0 if learned_found else 0.0
+                    recall = 1.0 if learned_found else 0.0
+                else:
+                    # Ground truth says point doesn't exist
+                    precision = 0.0 if learned_found else 1.0
+                    recall = 1.0  # No false negatives possible when ground truth is negative
+                
+                precisions.append(precision)
+                recalls.append(recall)
+            
+            # Aggregate metrics
+            exact_match_rate = exact_matches / len(learned_results) if learned_results else 1.0
+            avg_precision = np.mean(precisions)
+            avg_recall = np.mean(recalls)
+            f1_score = 2 * (avg_precision * avg_recall) / (avg_precision + avg_recall) \
+                      if (avg_precision + avg_recall) > 0 else 0.0
+            
+            accuracy_metrics.update({
+                'precision': avg_precision,
+                'recall': avg_recall,
+                'f1_score': f1_score,
+                'exact_match_rate': exact_match_rate
+            })
+            
+        except Exception as e:
+            logger.error(f"Error calculating point query accuracy: {e}")
+        
+        return accuracy_metrics
+    
+    def validate_index_accuracy(
+        self,
+        index_name: str,
+        num_test_queries: int = 100,
+        query_types: Optional[List[QueryType]] = None
+    ) -> Dict[str, Dict[str, float]]:
+        """
+        Comprehensive accuracy validation for a learned index.
+        
+        Args:
+            index_name: Name of the learned index to validate
+            num_test_queries: Number of test queries per query type
+            query_types: List of query types to test (None for all)
+            
+        Returns:
+            Dictionary mapping query types to accuracy metrics
+        """
+        if query_types is None:
+            query_types = [QueryType.POINT, QueryType.RANGE, QueryType.KNN]
+        
+        logger.info(f"Validating accuracy for index: {index_name}")
+        
+        accuracy_results = {}
+        
+        for query_type in query_types:
+            try:
+                # Create a small benchmark for this query type
+                if query_type == QueryType.POINT:
+                    benchmark = QueryBenchmark(
+                        query_type,
+                        num_queries=num_test_queries,
+                        tolerance=1e-6,
+                        description=f"Accuracy validation - {query_type.name}"
+                    )
+                elif query_type == QueryType.RANGE:
+                    benchmark = QueryBenchmark(
+                        query_type,
+                        num_queries=num_test_queries,
+                        selectivity=0.001,
+                        description=f"Accuracy validation - {query_type.name}"
+                    )
+                elif query_type == QueryType.KNN:
+                    benchmark = QueryBenchmark(
+                        query_type,
+                        num_queries=num_test_queries,
+                        k=5,
+                        description=f"Accuracy validation - {query_type.name}"
+                    )
+                
+                # Run benchmark for the specific index
+                metrics = self.run_benchmark(benchmark, index_names=[index_name])
+                
+                if index_name in metrics:
+                    accuracy_results[query_type.name] = metrics[index_name].accuracy_metrics
+                else:
+                    logger.warning(f"No results for {index_name} in {query_type.name} validation")
+                    
+            except Exception as e:
+                logger.error(f"Error validating {query_type.name} accuracy: {e}")
+                accuracy_results[query_type.name] = {'error': str(e)}
+        
+        return accuracy_results
     
     def comprehensive_evaluation(
         self,
