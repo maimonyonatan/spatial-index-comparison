@@ -67,9 +67,9 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/username/zm-rtree-research"
-Repository = "https://github.com/username/zm-rtree-research"
-Issues = "https://github.com/username/zm-rtree-research/issues"
+Homepage = "https://github.com/maimonyonatan/spatial-index-comparison"
+Repository = "https://github.com/maimonyonatan/spatial-index-comparison"
+Issues = "https://github.com/maimonyonatan/spatial-index-comparison/issues"
 
 [project.scripts]
 zm-research = "zm_rtree_research.cli:main"
