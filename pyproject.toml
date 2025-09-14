@@ -43,7 +43,6 @@ dependencies = [
     "memory-profiler>=0.61.0",
     # Utilities
     "tqdm>=4.65.0",
-    "click>=8.1.0",
     "pyyaml>=6.0",
     "python-dotenv>=1.0.0",
 ]
@@ -70,9 +69,6 @@ docs = [
 Homepage = "https://github.com/maimonyonatan/spatial-index-comparison"
 Repository = "https://github.com/maimonyonatan/spatial-index-comparison"
 Issues = "https://github.com/maimonyonatan/spatial-index-comparison/issues"
-
-[project.scripts]
-zm-research = "zm_rtree_research.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/zm_rtree_research"]

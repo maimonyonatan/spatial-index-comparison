@@ -1913,7 +1913,6 @@ name = "zm-rtree-research"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "click" },
     { name = "folium" },
     { name = "geopandas" },
     { name = "memory-profiler" },
@@ -1953,7 +1952,6 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.7.0" },
-    { name = "click", specifier = ">=8.1.0" },
     { name = "flake8", marker = "extra == 'dev'", specifier = ">=6.0.0" },
     { name = "folium", specifier = ">=0.14.0" },
     { name = "geopandas", specifier = ">=0.14.0" },

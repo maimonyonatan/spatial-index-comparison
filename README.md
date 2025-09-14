@@ -14,15 +14,14 @@ This project implements and compares three spatial indexing approaches:
 
 - **Multiple Index Types**: R-Tree, Linear Regression, and MLP-based learned indexes
 - **Comprehensive Evaluation**: Performance benchmarking across different query types
-- **Interactive GUI**: Streamlit-based web interface for exploration
-- **Command-Line Interface**: Full CLI for automated benchmarking
+- **Interactive GUI**: Streamlit-based web interface for exploration and analysis
 - **Query Types**: Point queries, range queries, and k-NN queries
 - **Performance Metrics**: Build time, memory usage, query latency, and throughput
 - **Visualization**: Interactive maps and performance charts
 
 ## 📋 Requirements
 
-- Python 3.11+
+- Python 3.12+
 - CUDA-capable GPU (optional, for MLP training acceleration)
 
 ## 🛠 Installation
@@ -54,24 +53,10 @@ python examples/basic_example.py
 
 ### 2. Launch Interactive GUI
 ```bash
-python main.py --gui
+python run_gui.py
 ```
 
-### 3. Use Command Line Interface
-```bash
-# Get help
-python main.py --help
-
-# Analyze dataset
-python main.py info data/sample_data.csv
-
-# Run comprehensive benchmark
-python main.py benchmark data/sample_data.csv --output-dir results/
-
-# Execute specific queries
-python main.py knn-query data/sample_data.csv --query-lat 40.0 --query-lon -75.0 --k 5
-python main.py range-query data/sample_data.csv --min-lat 39.0 --max-lat 41.0 --min-lon -76.0 --max-lon -74.0
-```
+The GUI will open in your web browser at `http://localhost:8501`
 
 ## 📊 Usage Examples
 
@@ -88,7 +73,7 @@ df = loader.load_csv("data/accidents.csv", sample_size=10000)
 
 # Prepare coordinates and Morton codes
 coordinates = df[['Start_Lat', 'Start_Lng']].values
-normalized_coords = loader.normalize_coordinates(df)
+normalized_coords = loader.normalize_coordinates(df, 'Start_Lat', 'Start_Lng')
 morton_codes = loader.compute_morton_codes(normalized_coords)
 
 # Build indexes
@@ -104,28 +89,6 @@ knn_results = engine.knn_query(40.0, -75.0, k=10)
 # Performance evaluation
 evaluator = PerformanceEvaluator(engine)
 evaluation = evaluator.comprehensive_evaluation()
-print(evaluator.get_comparison_report())
-```
-
-### CLI Examples
-
-```bash
-# Comprehensive benchmark with US Accidents dataset
-python main.py benchmark data/US_Accidents_March23.csv \
-    --sample-size 50000 \
-    --state PA \
-    --output-dir results/pa_accidents
-
-# Query performance comparison
-python main.py range-query data/accidents.csv \
-    --min-lat 39.5 --max-lat 40.5 \
-    --min-lon -75.5 --max-lon -74.5
-
-# k-NN query with specific index
-python main.py knn-query data/accidents.csv \
-    --index-type zm_mlp \
-    --query-lat 39.9526 --query-lon -75.1652 \
-    --k 20
 ```
 
 ## 🏗 Architecture
@@ -140,7 +103,6 @@ python main.py knn-query data/accidents.csv \
 - **`query/engine.py`**: Unified query interface
 - **`evaluation/evaluator.py`**: Performance evaluation framework
 - **`gui/app.py`**: Streamlit web interface
-- **`cli.py`**: Command-line interface
 
 ### Index Implementations
 
@@ -175,9 +137,9 @@ The system evaluates indexes across multiple dimensions:
 - **k-NN Queries**: Nearest neighbor searches with different k values
 
 ### Benchmarks
-- 1,000 point queries
-- 500 range queries (low, medium, high selectivity)
-- 500 k-NN queries (k=1, k=10)
+- Configurable number of point, range, and k-NN queries
+- Multiple selectivity levels for range queries
+- Different k values for k-NN queries
 
 ## 🖥 GUI Features
 
@@ -198,13 +160,12 @@ zm_rtree_project/
 │   ├── indexes/                     # Index implementations
 │   ├── query/                       # Query engine
 │   ├── evaluation/                  # Performance evaluation
-│   ├── gui/                         # Streamlit interface
-│   └── cli.py                       # Command-line interface
+│   └── gui/                         # Streamlit interface
 ├── examples/                        # Example scripts
 ├── tests/                           # Unit tests
 ├── docs/                           # Documentation
 ├── data/                           # Sample datasets
-├── main.py                         # Entry point
+├── run_gui.py                      # GUI launcher
 └── pyproject.toml                  # Project configuration
 ```
 
