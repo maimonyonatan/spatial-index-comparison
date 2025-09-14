@@ -1303,48 +1303,129 @@ class StreamlitApp:
     
     def _add_index_results_to_map(self, m: folium.Map, results: Dict[str, Any], 
                                   coords: np.ndarray, index_colors: Dict, marker_size: int) -> str:
-        """Add result points for each index to the map."""
+        """Add result points for each index to the map with multi-index detection."""
+        
+        # Track which points are found by which indexes
+        point_to_indexes = {}  # point_idx -> {index_name: distance/None, ...}
+        
+        # First pass: collect all results and track which indexes found each point
         for index_name, result in results.items():
             if 'error' not in result and result['results']:
-                color = index_colors.get(index_name, {}).get('color', 'blue')
-                
-                # Handle different result formats
                 for item in result['results']:
-                    # For k-NN queries, results are tuples of (index, distance)
-                    # For point/range queries, results are just indices
+                    # Handle different result formats
                     if isinstance(item, tuple) and len(item) >= 2:
                         # k-NN result: (index, distance)
                         point_idx, distance = item[0], item[1]
-                        popup_text = f"{index_name} Result: Point {point_idx}<br>Distance: {distance:.6f}"
+                        distance_info = distance
                     else:
                         # Point/range query result: just index
                         point_idx = item
-                        popup_text = f"{index_name} Result: Point {point_idx}"
+                        distance_info = None
                     
                     # Ensure point_idx is valid and within bounds
                     if isinstance(point_idx, (int, np.integer)) and 0 <= point_idx < len(coords):
-                        lat, lon = safe_coordinate_extract(coords, point_idx)
-                        folium.CircleMarker(
-                            location=[float(lat), float(lon)],
-                            radius=marker_size,
-                            color=color,
-                            fillColor=color,
-                            fillOpacity=0.6,
-                            weight=1,
-                            popup=popup_text
-                        ).add_to(m)
+                        if point_idx not in point_to_indexes:
+                            point_to_indexes[point_idx] = {}
+                        point_to_indexes[point_idx][index_name] = distance_info
         
-        # Create legend HTML
+        # Second pass: add markers with appropriate styling and popups
+        for point_idx, index_info in point_to_indexes.items():
+            lat, lon = safe_coordinate_extract(coords, point_idx)
+            
+            # Determine marker appearance based on how many indexes found this point
+            num_indexes = len(index_info)
+            
+            if num_indexes == 1:
+                # Single index result - use that index's color
+                index_name = list(index_info.keys())[0]
+                color = index_colors.get(index_name, {}).get('color', 'blue')
+                
+                # Create popup text
+                distance_info = index_info[index_name]
+                if distance_info is not None:
+                    popup_text = f"<b>Point {point_idx}</b><br>Found by: <b>{index_name}</b><br>Distance: {distance_info:.6f}"
+                else:
+                    popup_text = f"<b>Point {point_idx}</b><br>Found by: <b>{index_name}</b>"
+                
+                # Add single-color marker
+                folium.CircleMarker(
+                    location=[float(lat), float(lon)],
+                    radius=marker_size,
+                    color=color,
+                    fillColor=color,
+                    fillOpacity=0.7,
+                    weight=2,
+                    popup=folium.Popup(popup_text, max_width=300)
+                ).add_to(m)
+                
+            else:
+                # Multi-index result - use special styling
+                # Create a larger marker with black border to indicate multiple results
+                popup_lines = [f"<b>Point {point_idx}</b>", f"<b>Found by {num_indexes} indexes:</b>"]
+                
+                for idx_name, distance_info in index_info.items():
+                    color_name = index_colors.get(idx_name, {}).get('name', idx_name)
+                    if distance_info is not None:
+                        popup_lines.append(f"• <b>{color_name}</b>: distance {distance_info:.6f}")
+                    else:
+                        popup_lines.append(f"• <b>{color_name}</b>")
+                
+                popup_text = "<br>".join(popup_lines)
+                
+                # Use a gradient color or mixed appearance for multi-index results
+                # For simplicity, we'll use a purple color with thicker border
+                folium.CircleMarker(
+                    location=[float(lat), float(lon)],
+                    radius=marker_size + 2,  # Slightly larger
+                    color='#8B008B',  # Dark magenta border
+                    fillColor='#DDA0DD',  # Plum fill
+                    fillOpacity=0.8,
+                    weight=3,  # Thicker border
+                    popup=folium.Popup(popup_text, max_width=350),
+                    tooltip=f"Multi-index result ({num_indexes} indexes)"
+                ).add_to(m)
+        
+        # Create improved legend HTML with better styling
         legend_html = '''
         <div style="position: fixed; 
-                    top: 10px; right: 10px; width: 200px; height: auto; 
-                    background-color: white; z-index:9999; font-size:14px;
-                    border: 1px solid black; padding: 10px;">
-        <h4>Legend</h4>
+                    top: 10px; right: 10px; width: 220px; height: auto; 
+                    background-color: rgba(255, 255, 255, 0.95); 
+                    z-index: 9999; 
+                    font-size: 13px;
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    border: 2px solid #333; 
+                    border-radius: 8px;
+                    padding: 12px;
+                    box-shadow: 0 4px 8px rgba(0,0,0,0.3);">
+        <h4 style="margin: 0 0 10px 0; color: #333; font-size: 16px; text-align: center; border-bottom: 1px solid #ccc; padding-bottom: 5px;">
+            🗺️ Query Results Legend
+        </h4>
         '''
+        
+        # Add index-specific colors
         for index_name, color_info in index_colors.items():
-            legend_html += f'<i style="background:{color_info["color"]};width:10px;height:10px;display:inline-block;"></i> {color_info["name"]}<br>'
-        legend_html += '</div>'
+            if any(index_name in results and 'error' not in results[index_name] and results[index_name]['results'] 
+                   for index_name in [index_name]):
+                legend_html += f'''
+                <div style="margin: 5px 0; display: flex; align-items: center;">
+                    <div style="background: {color_info["color"]}; width: 16px; height: 16px; 
+                               border: 1px solid #333; border-radius: 50%; margin-right: 8px; 
+                               display: inline-block;"></div>
+                    <span style="color: #333; font-weight: 500;">{color_info["name"]}</span>
+                </div>'''
+        
+        # Add multi-index legend entry
+        legend_html += f'''
+        <div style="margin: 8px 0 5px 0; display: flex; align-items: center;">
+            <div style="background: #DDA0DD; width: 16px; height: 16px; 
+                       border: 2px solid #8B008B; border-radius: 50%; margin-right: 8px; 
+                       display: inline-block;"></div>
+            <span style="color: #333; font-weight: 500;">Multiple Indexes</span>
+        </div>
+        <div style="margin: 8px 0 0 0; padding-top: 8px; border-top: 1px solid #ccc; font-size: 11px; color: #666;">
+            💡 <b>Tip:</b> Click markers to see which indexes found each point
+        </div>
+        </div>'''
         
         return legend_html
     
