@@ -42,6 +42,7 @@ class PerformanceMetrics:
     std_query_time: float
     throughput_queries_per_sec: float
     accuracy_metrics: Dict[str, float]
+    total_queries: int  # Add missing field
     error_rate: float = 0.0
 
 
@@ -232,6 +233,7 @@ class PerformanceEvaluator:
                 std_query_time=np.std(query_times),
                 throughput_queries_per_sec=1.0 / np.mean(query_times) if np.mean(query_times) > 0 else 0.0,
                 accuracy_metrics=accuracy_metrics,
+                total_queries=len(queries),
                 error_rate=0.0  # Would calculate from failed queries
             )
         
@@ -797,6 +799,7 @@ class PerformanceEvaluator:
                             'std_query_time': metrics.std_query_time,
                             'throughput_queries_per_sec': metrics.throughput_queries_per_sec,
                             'accuracy_metrics': metrics.accuracy_metrics,
+                            'total_queries': metrics.total_queries,
                             'error_rate': metrics.error_rate
                         }
                         for index_name, metrics in benchmark_results.items()
