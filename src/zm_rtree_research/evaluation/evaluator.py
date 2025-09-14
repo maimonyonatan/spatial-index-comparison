@@ -70,6 +70,7 @@ class PerformanceEvaluator:
         bounds: Optional[Dict[str, float]] = None,
         selectivity: float = 0.001,
         k: int = 1,
+        tolerance: float = 1e-6,  # Add tolerance parameter
         random_state: int = 42
     ) -> List[Dict[str, Any]]:
         """
@@ -81,6 +82,7 @@ class PerformanceEvaluator:
             bounds: Coordinate bounds (if None, inferred from data)
             selectivity: Selectivity for range queries (fraction of space)
             k: Number of neighbors for kNN queries
+            tolerance: Tolerance for point queries
             random_state: Random seed
             
         Returns:
@@ -110,7 +112,7 @@ class PerformanceEvaluator:
                 queries.append({
                     'lat': lat,
                     'lon': lon,
-                    'tolerance': 1e-6
+                    'tolerance': tolerance  # Use the passed tolerance parameter
                 })
         
         elif query_type == QueryType.RANGE:
@@ -346,8 +348,9 @@ class PerformanceEvaluator:
             
             for learned_res, rtree_res in zip(learned_results, rtree_results):
                 # Convert results to sets of IDs for comparison
-                learned_ids = set(learned_res.get('point_ids', []))
-                rtree_ids = set(rtree_res.get('point_ids', []))
+                # Results are lists of point indices
+                learned_ids = set(learned_res if isinstance(learned_res, list) else [])
+                rtree_ids = set(rtree_res if isinstance(rtree_res, list) else [])
                 
                 if len(rtree_ids) == 0:
                     # Empty ground truth - perfect precision if learned result is also empty
@@ -416,11 +419,15 @@ class PerformanceEvaluator:
             ranking_accuracies = []
             
             for learned_res, rtree_res in zip(learned_results, rtree_results):
-                # Get nearest neighbors and distances
-                learned_ids = learned_res.get('nearest_neighbors', [])
-                learned_distances = learned_res.get('distances', [])
-                rtree_ids = rtree_res.get('nearest_neighbors', [])
-                rtree_distances = rtree_res.get('distances', [])
+                # k-NN results are lists of (index, distance) tuples
+                learned_neighbors = learned_res if isinstance(learned_res, list) else []
+                rtree_neighbors = rtree_res if isinstance(rtree_res, list) else []
+                
+                # Extract indices and distances
+                learned_ids = [item[0] if isinstance(item, tuple) else item for item in learned_neighbors]
+                learned_distances = [item[1] if isinstance(item, tuple) and len(item) > 1 else 0.0 for item in learned_neighbors]
+                rtree_ids = [item[0] if isinstance(item, tuple) else item for item in rtree_neighbors]
+                rtree_distances = [item[1] if isinstance(item, tuple) and len(item) > 1 else 0.0 for item in rtree_neighbors]
                 
                 if len(rtree_ids) == 0:
                     precisions.append(1.0)
@@ -455,9 +462,8 @@ class PerformanceEvaluator:
                 else:
                     distance_accuracies.append(1.0)
                 
-                # Calculate ranking accuracy (Kendall's tau or simpler overlap measure)
+                # Calculate ranking accuracy (how many of the top-k are correct)
                 if len(learned_ids) > 0 and len(rtree_ids) > 0:
-                    # Simple ranking accuracy: how many of the top-k are correct
                     k = min(len(learned_ids), len(rtree_ids))
                     top_k_learned = set(learned_ids[:k])
                     top_k_rtree = set(rtree_ids[:k])
@@ -511,8 +517,9 @@ class PerformanceEvaluator:
             recalls = []
             
             for learned_res, rtree_res in zip(learned_results, rtree_results):
-                learned_found = learned_res.get('found', False)
-                rtree_found = rtree_res.get('found', False)
+                # Point query results are lists of point indices
+                learned_found = len(learned_res) > 0 if isinstance(learned_res, list) else False
+                rtree_found = len(rtree_res) > 0 if isinstance(rtree_res, list) else False
                 
                 # Exact match check
                 if learned_found == rtree_found:
