@@ -1307,8 +1307,22 @@ class StreamlitApp:
         for index_name, result in results.items():
             if 'error' not in result and result['results']:
                 color = index_colors.get(index_name, {}).get('color', 'blue')
-                for point_idx in result['results']:
-                    if point_idx < len(coords):
+                
+                # Handle different result formats
+                for item in result['results']:
+                    # For k-NN queries, results are tuples of (index, distance)
+                    # For point/range queries, results are just indices
+                    if isinstance(item, tuple) and len(item) >= 2:
+                        # k-NN result: (index, distance)
+                        point_idx, distance = item[0], item[1]
+                        popup_text = f"{index_name} Result: Point {point_idx}<br>Distance: {distance:.6f}"
+                    else:
+                        # Point/range query result: just index
+                        point_idx = item
+                        popup_text = f"{index_name} Result: Point {point_idx}"
+                    
+                    # Ensure point_idx is valid and within bounds
+                    if isinstance(point_idx, (int, np.integer)) and 0 <= point_idx < len(coords):
                         lat, lon = safe_coordinate_extract(coords, point_idx)
                         folium.CircleMarker(
                             location=[float(lat), float(lon)],
@@ -1317,7 +1331,7 @@ class StreamlitApp:
                             fillColor=color,
                             fillOpacity=0.6,
                             weight=1,
-                            popup=f"{index_name} Result: ({lat:.6f}, {lon:.6f})"
+                            popup=popup_text
                         ).add_to(m)
         
         # Create legend HTML
