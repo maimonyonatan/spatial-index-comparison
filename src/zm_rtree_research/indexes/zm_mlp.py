@@ -17,6 +17,31 @@ import os
 logger = logging.getLogger(__name__)
 
 
+def get_available_device():
+    """
+    Safely determine the best available device for PyTorch.
+    
+    Returns:
+        torch.device: The best available device (cuda if available and working, else cpu)
+    """
+    if torch.cuda.is_available():
+        try:
+            # Test if CUDA actually works
+            test_tensor = torch.tensor([1.0])
+            test_tensor = test_tensor.cuda()
+            test_result = test_tensor * 2
+            test_result = test_result.cpu()
+            logger.info("CUDA is available and working")
+            return torch.device('cuda')
+        except Exception as e:
+            logger.warning(f"CUDA is available but not working properly: {e}")
+            logger.info("Falling back to CPU")
+            return torch.device('cpu')
+    else:
+        logger.info("CUDA not available, using CPU")
+        return torch.device('cpu')
+
+
 class MLPModel(nn.Module):
     """Multi-stage MLP model for Z-address to position mapping following the paper."""
     
@@ -124,7 +149,7 @@ class ZMMLPIndex:
         
         # Set device
         if device == "auto":
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            self.device = get_available_device()
         else:
             self.device = torch.device(device)
         

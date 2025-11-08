@@ -641,7 +641,7 @@ class StreamlitApp:
     
     def _performance_evaluation_page(self) -> None:
         """Performance evaluation and benchmarking page."""
-        st.header("⚡ Performance Evaluation")
+        st.header("⚡ Sophisticated Performance Evaluation")
         
         if not st.session_state.indexes_built:
             st.warning("Please build indexes first.")
@@ -655,84 +655,450 @@ class StreamlitApp:
         
         st.success(f"✅ Available indexes: {', '.join(available_indexes)}")
         
-        # Initialize evaluator
-        self.evaluator = PerformanceEvaluator(self.query_engine)
+        # Initialize sophisticated evaluator
+        from zm_rtree_research.evaluation.evaluator import SophisticatedPerformanceEvaluator
+        self.sophisticated_evaluator = SophisticatedPerformanceEvaluator(self.query_engine)
         
-        # Simple benchmark configuration
-        st.subheader("🎯 Benchmark Configuration")
+        # Evaluation Configuration
+        st.subheader("🎯 Advanced Evaluation Configuration")
+        
+        with st.expander("ℹ️ What's New in Sophisticated Evaluation", expanded=False):
+            st.markdown("""
+            **🚀 Enhanced Features:**
+            - **Parameter Variation**: Tests multiple tolerances, selectivities, k-values, etc.
+            - **Dataset Size Scaling**: Evaluates performance across different data sizes
+            - **Statistical Trend Analysis**: Identifies correlations and performance patterns
+            - **Transparent Experiments**: See exactly which experiments are run
+            - **Advanced Visualizations**: Interactive plots showing trends and trade-offs
+            - **Actionable Insights**: Specific recommendations based on your data
+            
+            **📊 Experiment Types:**
+            - **Point Queries**: Varies tolerance (1e-6 to 1e-2) and query distributions
+            - **Range Queries**: Tests selectivity (0.01% to 10%), aspect ratios, and locations
+            - **k-NN Queries**: Different k values (1 to 50) and query patterns
+            """)
         
         col1, col2 = st.columns(2)
-        with col1:
-            num_point_queries = st.number_input("Point Queries", min_value=10, max_value=1000, value=100)
-            num_range_queries = st.number_input("Range Queries", min_value=10, max_value=1000, value=100)
-        with col2:
-            num_knn_queries = st.number_input("k-NN Queries", min_value=10, max_value=1000, value=100)
-            k_value = st.number_input("k for k-NN", min_value=1, max_value=50, value=5)
-        
-        # Quick benchmark buttons
-        st.subheader("🚀 Quick Benchmarks")
-        col1, col2, col3 = st.columns(3)
         
         with col1:
-            if st.button("📍 Point Query Test", help="Quick point query benchmark"):
-                self._run_quick_benchmark("point", num_point_queries)
+            max_dataset_size = st.number_input(
+                "Maximum Dataset Size", 
+                min_value=500, 
+                max_value=len(st.session_state.coordinates) if st.session_state.coordinates is not None else 10000,
+                value=min(5000, len(st.session_state.coordinates) if st.session_state.coordinates is not None else 5000),
+                help="Larger sizes = more comprehensive but slower evaluation"
+            )
+            
+            enable_detailed_logging = st.checkbox(
+                "Enable Detailed Logging",
+                value=False,
+                help="Show detailed progress of each experiment (verbose output)"
+            )
         
         with col2:
-            if st.button("📦 Range Query Test", help="Quick range query benchmark"):
-                self._run_quick_benchmark("range", num_range_queries)
+            # Show what experiments will be run
+            total_coords = len(st.session_state.coordinates) if st.session_state.coordinates is not None else 1000
+            dataset_sizes = self.sophisticated_evaluator._generate_dataset_size_progression(
+                min(max_dataset_size, total_coords)
+            )
+            
+            st.info(f"**Dataset sizes to test:** {dataset_sizes}")
+            st.info(f"**Total data points available:** {total_coords}")
+            
+            # Estimate experiment count
+            estimated_experiments = len(dataset_sizes) * (
+                5 * 3 * 5 +  # Point queries: 5 tolerances * 3 densities * 5 trials
+                4 * 4 * 4 * 5 +  # Range queries: 4 selectivities * 4 ratios * 4 locations * 5 trials  
+                5 * 3 * 3 * 5    # kNN queries: 5 k-values * 3 densities * 3 locations * 5 trials
+            ) * len(available_indexes)
+            
+            st.warning(f"⚠️ **Estimated total experiments:** ~{estimated_experiments}")
+            st.write("💡 This may take several minutes to complete")
         
-        with col3:
-            if st.button("🎯 k-NN Query Test", help="Quick k-NN benchmark"):
-                self._run_quick_benchmark("knn", num_knn_queries, k_value)
-        
-        # Comprehensive evaluation
-        if st.button("🏆 Run Full Benchmark Suite", type="primary"):
-            with st.spinner("Running comprehensive evaluation..."):
+        # Run Sophisticated Evaluation
+        if st.button("🚀 Run Sophisticated Evaluation", type="primary", 
+                    help="This will run comprehensive experiments with parameter variation and trend analysis"):
+            
+            if enable_detailed_logging:
+                logging.getLogger().setLevel(logging.DEBUG)
+            
+            with st.spinner("Running sophisticated performance evaluation..."):
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
                 try:
-                    # Create benchmarks
-                    benchmarks = [
-                        QueryBenchmark(QueryType.POINT, num_queries=num_point_queries, 
-                                     tolerance=0.001, description="Point Query Benchmark"),
-                        QueryBenchmark(QueryType.RANGE, num_queries=num_range_queries,
-                                     selectivity=0.01, description="Range Query Benchmark"),
-                        QueryBenchmark(QueryType.KNN, num_queries=num_knn_queries,
-                                     k=k_value, description=f"{k_value}-NN Query Benchmark")
-                    ]
+                    # Track progress with a callback
+                    status_text.text("Initializing sophisticated evaluation...")
+                    progress_bar.progress(0.05)
                     
-                    # Run benchmarks
-                    all_results = {}
-                    progress_bar = st.progress(0)
+                    status_text.text("Running parameter variation experiments...")
+                    progress_bar.progress(0.2)
                     
-                    for i, benchmark in enumerate(benchmarks):
-                        st.text(f"Running: {benchmark.description}")
-                        progress_bar.progress((i + 1) / len(benchmarks))
-                        
-                        try:
-                            metrics = self.evaluator.run_benchmark(benchmark, index_names=available_indexes)
-                            all_results[benchmark.description] = metrics
-                        except Exception as e:
-                            st.error(f"Error in benchmark {benchmark.description}: {e}")
-                            all_results[benchmark.description] = {'error': str(e)}
+                    # Run the sophisticated evaluation
+                    evaluation_report = self.sophisticated_evaluator.run_sophisticated_evaluation(
+                        max_dataset_size=max_dataset_size
+                    )
                     
-                    progress_bar.empty()
+                    progress_bar.progress(0.8)
+                    status_text.text("Generating visualizations and insights...")
                     
-                    # Store and display results
-                    st.session_state.evaluation_results = {
-                        'benchmarks': all_results,
-                        'timestamp': time.time()
-                    }
+                    # Store results
+                    st.session_state.sophisticated_evaluation_results = evaluation_report
                     
-                    st.success("✅ Comprehensive evaluation completed!")
-                    self._display_benchmark_results(all_results)
+                    progress_bar.progress(1.0)
+                    status_text.text("✅ Sophisticated evaluation completed!")
+                    
+                    st.success("🎉 Sophisticated evaluation completed successfully!")
+                    
+                    # Display results immediately
+                    self._display_sophisticated_results(evaluation_report)
                     
                 except Exception as e:
-                    st.error(f"❌ Error during evaluation: {e}")
+                    st.error(f"❌ Evaluation failed: {e}")
+                    logger.error(f"Sophisticated evaluation error: {e}", exc_info=True)
+                finally:
+                    progress_bar.empty()
+                    status_text.empty()
         
-        # Display saved results if available
-        if st.session_state.evaluation_results:
-            st.subheader("📊 Previous Evaluation Results")
-            if st.button("🔄 Show Results"):
-                self._display_benchmark_results(st.session_state.evaluation_results['benchmarks'])
+        # Display previous results if available
+        if hasattr(st.session_state, 'sophisticated_evaluation_results') and st.session_state.sophisticated_evaluation_results:
+            st.subheader("📊 Previous Sophisticated Evaluation Results")
+            
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.info("Previous evaluation results are available below.")
+            with col2:
+                if st.button("🔄 Show Results"):
+                    self._display_sophisticated_results(st.session_state.sophisticated_evaluation_results)
+        
+        # Legacy simple evaluation (for comparison)
+        st.subheader("🔍 Quick Legacy Evaluation")
+        st.write("For comparison with the old simple evaluation approach:")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button("📍 Quick Point Test"):
+                self._run_quick_benchmark("point", 20)
+        with col2:
+            if st.button("📦 Quick Range Test"):
+                self._run_quick_benchmark("range", 20)
+        with col3:
+            if st.button("🎯 Quick k-NN Test"):
+                self._run_quick_benchmark("knn", 20, 5)
+    
+    def _display_sophisticated_results(self, evaluation_report: Dict[str, Any]) -> None:
+        """Display comprehensive results from sophisticated evaluation."""
+        st.header("📈 Sophisticated Evaluation Results")
+        
+        if "error" in evaluation_report:
+            st.error(f"Evaluation failed: {evaluation_report['error']}")
+            return
+        
+        # Experiment Summary
+        summary = evaluation_report.get('experiment_summary', {})
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Experiments", summary.get('total_experiments', 0))
+        with col2:
+            st.metric("Unique Configurations", summary.get('unique_configurations', 0))
+        with col3:
+            st.metric("Indexes Tested", len(summary.get('indexes_tested', [])))
+        with col4:
+            size_range = summary.get('dataset_size_range', [0, 0])
+            st.metric("Dataset Size Range", f"{size_range[0]} - {size_range[1]}")
+        
+        # Performance Rankings
+        st.subheader("🏆 Overall Performance Rankings")
+        rankings = evaluation_report.get('performance_rankings', {})
+        
+        if rankings:
+            ranking_data = []
+            for i, (index_name, avg_time) in enumerate(rankings.items(), 1):
+                ranking_data.append({
+                    "Rank": i,
+                    "Index": index_name,
+                    "Avg Query Time (ms)": f"{avg_time * 1000:.4f}",
+                    "Performance Score": f"{(1/avg_time):.2f}" if avg_time > 0 else "∞"
+                })
+            
+            df_rankings = pd.DataFrame(ranking_data)
+            st.dataframe(df_rankings, width='stretch')
+            
+            # Performance ranking visualization
+            fig_ranking = px.bar(
+                df_rankings, 
+                x="Index", 
+                y="Avg Query Time (ms)",
+                title="Overall Performance Ranking (Lower is Better)",
+                color="Index"
+            )
+            st.plotly_chart(fig_ranking, use_container_width=True)
+        
+        # Insights and Recommendations
+        insights = evaluation_report.get('insights_and_recommendations', {})
+        if insights:
+            st.subheader("💡 Key Insights and Recommendations")
+            
+            tabs = st.tabs(["Performance", "Parameters", "Scalability", "Recommendations"])
+            
+            with tabs[0]:
+                st.write("**Performance Insights:**")
+                for insight in insights.get('performance_insights', []):
+                    st.write(f"• {insight}")
+            
+            with tabs[1]:
+                st.write("**Parameter Insights:**")
+                for insight in insights.get('parameter_insights', []):
+                    st.write(f"• {insight}")
+            
+            with tabs[2]:
+                st.write("**Scalability Insights:**")
+                for insight in insights.get('scalability_insights', []):
+                    st.write(f"• {insight}")
+            
+            with tabs[3]:
+                st.write("**Recommendations:**")
+                for rec in insights.get('recommendations', []):
+                    st.success(f"✅ {rec}")
+        
+        # Advanced Visualizations
+        st.subheader("📊 Advanced Performance Visualizations")
+        
+        # Create visualization plots
+        plots = self.sophisticated_evaluator.create_visualization_plots(evaluation_report)
+        
+        if plots:
+            # Create tabs for different visualizations - PUT KEY PLOTS FIRST
+            plot_tabs = st.tabs([
+                "🎯 Runtime vs Accuracy", 
+                "📈 Parameter Effects", 
+                "📏 Dataset Size Impact",
+                "⚖️ Trade-offs",
+                "🔍 Detailed Analysis"
+            ])
+            
+            with plot_tabs[0]:  # KEY VISUALIZATION FIRST
+                st.markdown("**This is the key insight visualization showing how performance and accuracy change as search parameters increase.**")
+                
+                # Show runtime vs accuracy plots for each parameter
+                runtime_accuracy_plots = [k for k in plots.keys() if k.startswith('runtime_vs_accuracy_')]
+                
+                if runtime_accuracy_plots:
+                    for plot_key in runtime_accuracy_plots:
+                        param_name = plot_key.replace('runtime_vs_accuracy_', '').title()
+                        st.subheader(f"📍 {param_name} Analysis")
+                        
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            st.plotly_chart(plots[plot_key], use_container_width=True)
+                        
+                        with col2:
+                            st.markdown("**💡 What to look for:**")
+                            if 'tolerance' in plot_key:
+                                st.write("• **R-Tree** (red) should start fast but slow down as tolerance increases")
+                                st.write("• **Learned indexes** should show better performance at higher tolerances")
+                                st.write("• **Accuracy** may drop slightly for learned indexes")
+                                st.write("• **Crossover point** shows where learned indexes become better")
+                            elif 'selectivity' in plot_key:
+                                st.write("• **Small ranges**: R-Tree wins")
+                                st.write("• **Large ranges**: Learned indexes win")
+                                st.write("• **Accuracy** stays high for larger ranges")
+                                st.write("• Look for the **crossover selectivity**")
+                            elif 'k' in plot_key:
+                                st.write("• **Small k**: R-Tree optimized")
+                                st.write("• **Large k**: Learned indexes competitive")
+                                st.write("• **Accuracy** should remain high")
+                                st.write("• **Performance gap** narrows with larger k")
+                        
+                        # Add key findings box
+                        st.info(f"**Key Finding**: Look for where the lines cross - this shows the {param_name.lower()} threshold where learned indexes become preferable to R-Tree.")
+                        st.divider()
+                else:
+                    st.warning("⚠️ No runtime vs accuracy plots available. The experiment may not have covered sufficient parameter ranges.")
+                    st.write("**Possible solutions:**")
+                    st.write("• Increase the maximum dataset size")
+                    st.write("• Ensure all three index types are built")
+                    st.write("• Check that the evaluation completed successfully")
+            
+            with plot_tabs[1]:
+                st.write("**Parameter Impact Analysis:** How different parameters affect query performance.")
+                param_plots = [k for k in plots.keys() if k.startswith('performance_vs_')]
+                param_plots = [k for k in param_plots if k != 'performance_vs_size']
+                
+                if param_plots:
+                    for plot_key in param_plots:
+                        param_name = plot_key.replace('performance_vs_', '').title()
+                        st.subheader(f"Impact of {param_name}")
+                        st.plotly_chart(plots[plot_key], use_container_width=True)
+                        
+                        # Add parameter-specific analysis
+                        if 'tolerance' in plot_key:
+                            st.write("**Analysis:** Higher tolerance generally means more results and slower queries. "
+                                    "Find the sweet spot for your accuracy needs.")
+                        elif 'selectivity' in plot_key:
+                            st.write("**Analysis:** Higher selectivity (larger areas) typically increase query time. "
+                                    "Some indexes handle large selections better than others.")
+                        elif 'k' in plot_key:
+                            st.write("**Analysis:** Larger k values require finding more neighbors. "
+                                    "Look for indexes that scale well with increasing k.")
+                        elif 'aspect_ratio' in plot_key:
+                            st.write("**Analysis:** Rectangle shape affects query efficiency. "
+                                    "Some indexes prefer squares (ratio=1) over elongated rectangles.")
+                else:
+                    st.info("Parameter analysis plots not available")
+            
+            with plot_tabs[2]:
+                if 'performance_vs_size' in plots:
+                    st.plotly_chart(plots['performance_vs_size'], use_container_width=True)
+                    st.write("**Analysis:** Shows how query performance scales with dataset size. "
+                            "Look for indexes with flatter curves (better scalability).")
+                else:
+                    st.info("Dataset size analysis not available (need multiple sizes)")
+            
+            with plot_tabs[3]:
+                if 'accuracy_performance_tradeoff' in plots:
+                    st.plotly_chart(plots['accuracy_performance_tradeoff'], use_container_width=True)
+                    st.write("**Analysis:** Shows the trade-off between speed and accuracy. "
+                            "Top-left corner is ideal (fast and accurate). "
+                            "Bottom-right corner is worst (slow and inaccurate).")
+                else:
+                    st.info("Trade-off analysis not available")
+            
+            with plot_tabs[4]:
+                # Show trend analysis details
+                trends = evaluation_report.get('trend_analyses', {})
+                if trends:
+                    st.write("**Statistical Trend Analysis:**")
+                    
+                    for trend_key, trend_list in trends.items():
+                        with st.expander(f"📊 {trend_key.replace('_', ' ').title()}", expanded=False):
+                            for trend in trend_list:
+                                col1, col2, col3 = st.columns(3)
+                                
+                                with col1:
+                                    st.metric("Parameter", trend.parameter_name)
+                                    st.metric("Correlation", f"{trend.correlation:.3f}")
+                                
+                                with col2:
+                                    st.metric("P-value", f"{trend.p_value:.4f}")
+                                    st.metric("R² Score", f"{trend.regression_r2:.3f}")
+                                
+                                with col3:
+                                    st.write(f"**Trend:** {trend.trend_description}")
+                                    if trend.best_parameter_value is not None:
+                                        st.write(f"**Best Value:** {trend.best_parameter_value}")
+                                
+                                # Significance indicator
+                                if trend.p_value < 0.05:
+                                    st.success("✅ Statistically significant trend")
+                                else:
+                                    st.warning("⚠️ Not statistically significant")
+                                
+                                st.divider()
+                else:
+                    st.info("Detailed trend analysis not available")
+        
+        # Experiment Transparency
+        st.subheader("🔍 Experiment Transparency")
+        
+        with st.expander("📋 Detailed Experiment Log", expanded=False):
+            detailed_results = evaluation_report.get('detailed_results', [])
+            
+            if detailed_results:
+                # Convert to DataFrame for better display
+                df_detailed = pd.DataFrame(detailed_results)
+                
+                # Add filters
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    filter_index = st.selectbox("Filter by Index", ["All"] + df_detailed['index_name'].unique().tolist())
+                with col2:
+                    query_types = df_detailed['config_id'].str.split('_').str[0].unique()
+                    filter_query = st.selectbox("Filter by Query Type", ["All"] + query_types.tolist())
+                with col3:
+                    if 'dataset_size' in df_detailed.columns:
+                        sizes = sorted(df_detailed['dataset_size'].unique())
+                        filter_size = st.selectbox("Filter by Dataset Size", ["All"] + [str(s) for s in sizes])
+                    else:
+                        filter_size = "All"
+                
+                # Apply filters
+                filtered_df = df_detailed.copy()
+                if filter_index != "All":
+                    filtered_df = filtered_df[filtered_df['index_name'] == filter_index]
+                if filter_query != "All":
+                    filtered_df = filtered_df[filtered_df['config_id'].str.startswith(filter_query)]
+                if filter_size != "All":
+                    filtered_df = filtered_df[filtered_df['dataset_size'] == int(filter_size)]
+                
+                # Display filtered results
+                st.write(f"**Showing {len(filtered_df)} of {len(df_detailed)} experiments**")
+                
+                # Format for display
+                display_df = filtered_df[[
+                    'index_name', 'dataset_size', 'query_time', 'result_count', 'precision', 'trial_id'
+                ]].copy()
+                
+                # Add parameter columns if they exist
+                param_cols = [col for col in filtered_df.columns 
+                             if col in ['tolerance', 'selectivity', 'k', 'aspect_ratio', 'query_density', 'query_location']]
+                for col in param_cols:
+                    display_df[col] = filtered_df[col]
+                
+                # Format numeric columns
+                display_df['query_time'] = display_df['query_time'].apply(lambda x: f"{x*1000:.4f} ms")
+                if 'precision' in display_df.columns:
+                    display_df['precision'] = display_df['precision'].apply(lambda x: f"{x:.3f}")
+                
+                st.dataframe(display_df, width='stretch', height=400)
+                
+                # Download option
+                csv = df_detailed.to_csv(index=False)
+                st.download_button(
+                    label="📥 Download Full Results as CSV",
+                    data=csv,
+                    file_name="sophisticated_evaluation_results.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.info("No detailed results available")
+        
+        # Performance Summary Statistics
+        st.subheader("📈 Statistical Summary")
+        
+        summary_stats = evaluation_report.get('summary_statistics', {})
+        if summary_stats:
+            # Convert nested dict to display format
+            stats_data = []
+            for index_name, stats in summary_stats.items():
+                if isinstance(stats, dict):
+                    for metric, values in stats.items():
+                        if isinstance(values, dict):
+                            for stat_type, value in values.items():
+                                stats_data.append({
+                                    'Index': index_name,
+                                    'Metric': metric,
+                                    'Statistic': stat_type,
+                                    'Value': f"{value:.6f}" if isinstance(value, (int, float)) else str(value)
+                                })
+            
+            if stats_data:
+                df_stats = pd.DataFrame(stats_data)
+                
+                # Pivot for better display
+                pivot_df = df_stats.pivot_table(
+                    index=['Index', 'Metric'], 
+                    columns='Statistic', 
+                    values='Value', 
+                    aggfunc='first'
+                ).reset_index()
+                
+                st.dataframe(pivot_df, width='stretch')
+            else:
+                st.info("Summary statistics format not recognized")
+        else:
+            st.info("No summary statistics available")
     
     def _run_quick_benchmark(self, benchmark_type: str, num_queries: int, k: int = 5) -> None:
         """Run a quick benchmark for a specific query type."""
